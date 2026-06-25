@@ -12,13 +12,13 @@ router.post('/mock-login', async (req: Request, res: Response) => {
   
   const trimmedEmail = (email || '').trim().toLowerCase();
   
-  if (trimmedEmail === 'empresario') {
+  if ((trimmedEmail === 'empresario' || trimmedEmail === 'empresario@miuniverse.de')) {
     if (password !== 'Wer2341q!!!') {
       logger.warn(`Auth failed: Incorrect password for Empresario`);
       return res.status(401).json({ error: 'Access Denied: Invalid credentials' });
     }
     email = 'empresario@miuniverse.de';
-  } else if (trimmedEmail === 'thaimachine') {
+  } else if ((trimmedEmail === 'thaimachine' || trimmedEmail === 'admin@miuniverse.de')) {
     if (password !== 'Wer2341q!!!') {
       logger.warn(`Auth failed: Incorrect password for thaimachine`);
       return res.status(401).json({ error: 'Access Denied: Invalid credentials' });
