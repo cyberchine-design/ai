@@ -23,12 +23,37 @@ function extractImageUrls(rawContent: string): { filename: string; fullUrl: stri
   const found: { filename: string; fullUrl: string }[] = [];
   let m;
   while ((m = UPLOAD_URL_REGEX.exec(rawContent)) !== null) {
-    const username = m[1];
-    const filename = m[2];
-    const fullMatch = m[0];
-    found.push({ filename, fullUrl: fullMatch });
+    found.push({ filename: m[2], fullUrl: m[0] });
   }
   return found;
+}
+
+/**
+ * Laedt ein Bild von einer URL herunter und konvertiert es zu base64 Data-URL.
+ * M3 akzeptiert keine externen HTTPS-URLs in image_url - nur data:image/...;base64,...
+ */
+async function fetchImageAsBase64(url: string, timeoutMs: number = 10000): Promise<string | null> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (!res.ok) {
+      logger.warn(`[Multimodal] Failed to fetch image ${url}: HTTP ${res.status}`);
+      return null;
+    }
+    const contentType = res.headers.get('content-type') || 'image/png';
+    if (!contentType.startsWith('image/')) {
+      logger.warn(`[Multimodal] URL is not an image: ${contentType}`);
+      return null;
+    }
+    const buffer = await res.arrayBuffer();
+    const base64 = Buffer.from(buffer).toString('base64');
+    return `data:${contentType};base64,${base64}`;
+  } catch (e: any) {
+    logger.error(`[Multimodal] Error fetching image ${url}: ${e.message}`);
+    return null;
+  }
 }
 
 async function buildMultimodalContent(rawContent: string): Promise<string | MessageContentPart[]> {
@@ -55,17 +80,23 @@ async function buildMultimodalContent(rawContent: string): Promise<string | Mess
   }
 
   for (const { fullUrl } of uploadedUrls) {
-    parts.push({
-      type: 'image_url',
-      image_url: { url: fullUrl }
-    });
+    const base64 = await fetchImageAsBase64(fullUrl);
+    if (base64) {
+      parts.push({
+        type: 'image_url',
+        image_url: { url: base64 }
+      });
+      logger.info(`[Multimodal] Fetched ${fullUrl} -> base64 (${base64.length} chars)`);
+    } else {
+      logger.warn(`[Multimodal] Skipping image ${fullUrl} (fetch failed)`);
+    }
   }
 
   if (parts.length === 0) {
     return textOnly || rawContent;
   }
 
-  logger.info(`[Multimodal] Converted message to ${parts.length} part(s): ${uploadedUrls.length} uploaded image(s), ${base64Matches.length} base64 image(s)`);
+  logger.info(`[Multimodal] Built payload with ${parts.length} part(s): ${uploadedUrls.length} uploaded -> base64, ${base64Matches.length} inline base64`);
   return parts;
 }
 
@@ -75,7 +106,7 @@ export class ChatService {
     messages: ChatMessageInput[],
     systemPrompt?: string,
     model: string = 'MiniMax-M3'
-  ): Promise<{ content: string; tokensUsed: number }> {
+  ): Promise< { content: string; tokensUsed: number; error?: string; rawError?: string }> {
     let combinedInputText = systemPrompt || '';
     for (const msg of messages) {
       combinedInputText += `\n${msg.role}: ${msg.content}`;
@@ -118,7 +149,7 @@ export class ChatService {
       if (!response.ok) {
         const errorText = await response.text();
         logger.error(`MiniMax API request failed: ${response.status} - ${errorText}`);
-        throw new Error(`MiniMax API error: ${response.statusText}`);
+        throw new Error(`MiniMax API error: ${response.statusText} | ${errorText.substring(0, 500)}`);
       }
       const responseData = (await response.json()) as any;
       const responseText = responseData.choices?.[0]?.message?.content || '';
