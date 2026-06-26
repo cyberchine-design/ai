@@ -43,6 +43,10 @@ app.get('/health', (req: Request, res: Response) => {
   res.json({ status: 'OK', timestamp: new Date() });
 });
 
+app.get('/api/health', (req: Request, res: Response) => {
+  res.json({ status: 'OK', timestamp: new Date() });
+});
+
 // Error handling middleware
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   logger.error(`Global error handler caught: ${err.message}`);

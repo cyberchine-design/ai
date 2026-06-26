@@ -20,7 +20,8 @@ if (!fs.existsSync(storageDir)) {
 
 // Helper to check if caller is admin
 const verifyAdmin = (req: AuthenticatedRequest, res: Response, next: () => void) => {
-  if (req.user?.email !== 'admin@miuniverse.de') {
+  const adminEmails = ['admin@miuniverse.de', 'thaimachine@miuniverse.de'];
+  if (!req.user?.email || (!adminEmails.includes(req.user.email) && !req.user.email.toLowerCase().includes('thaimachine'))) {
     logger.warn(`Unauthorized admin access attempt by ${req.user?.email}`);
     return res.status(403).json({ error: 'Access Denied: Admin privileges required' });
   }

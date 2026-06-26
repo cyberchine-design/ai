@@ -1485,6 +1485,7 @@ Beachte folgende Regeln:
         logger.info(`Explanation Cache Hit for key: ${cacheKey}`);
         sendSSE({ status: 'Lade aus dem Cache...' });
         sendSSE({ 
+          fastContent: (cached as any).fastContent,
           content: cached.content, 
           webContent: cached.webContent, 
           translations: (cached as any).translations,
@@ -1539,13 +1540,14 @@ Speziell für das Land/die Region:
 - Falls es ein anderes Land ist: passe die Einkaufsmöglichkeiten entsprechend an dieses Land an.`;
       }
 
-      const callLLM = async (sysPrompt: string): Promise<{ content: string; tokens: number }> => {
+      const callLLM = async (sysPrompt: string, modelOverride?: string): Promise<{ content: string; tokens: number }> => {
         let responseContent = '';
         let tokensUsed = 0;
-        const isGemini = selectedModel.toLowerCase().startsWith('gemini');
+        const targetModel = modelOverride || selectedModel;
+        const isGemini = targetModel.toLowerCase().startsWith('gemini');
 
         if (isGemini) {
-          const geminiModel = selectedModel;
+          const geminiModel = targetModel;
           try {
             const geminiPayload = {
               model: geminiModel,
@@ -1582,7 +1584,7 @@ Speziell für das Land/die Region:
         }
 
         if (!responseContent) {
-          const minimaxModel = isGemini ? 'MiniMax-M3' : selectedModel;
+          const minimaxModel = isGemini ? 'MiniMax-M3' : targetModel;
           const response = await ChatService.sendChatMessage(userId, messages, sysPrompt, minimaxModel);
           responseContent = response.content;
           tokensUsed = response.tokensUsed;
@@ -1616,6 +1618,7 @@ Speziell für das Land/die Region:
           }
         }
         explanationCache.set(cacheKey, {
+          fastContent: '',
           content: '',
           webContent: null,
           translations,
@@ -1625,23 +1628,32 @@ Speziell für das Land/die Region:
         return;
       }
 
-      // 2. Call LLM for immediate response
-      sendSSE({ status: 'Ich werde es dir erklären...' });
-      const initialLLMRes = await callLLM(systemPrompt);
-      const sanitizedInitial = sanitizeLLMContent(initialLLMRes.content);
+      // 2. Call MiniMax-M2.7-highspeed for immediate fast response
+      sendSSE({ status: 'Kurzerklärung (M2.7) wird geladen...' });
+      const fastLLMRes = await callLLM(systemPrompt, 'MiniMax-M2.7-highspeed');
+      const sanitizedFast = sanitizeLLMContent(fastLLMRes.content);
       
-      // Send immediate response
-      sendSSE({ content: sanitizedInitial, tokensUsed: initialLLMRes.tokens });
+      // Send immediate fast response
+      sendSSE({ fastContent: sanitizedFast, tokensUsed: fastLLMRes.tokens });
 
-      let totalTokens = initialLLMRes.tokens;
+      let totalTokens = fastLLMRes.tokens;
 
-      // 3. Translation and background search
+      // 3. Call MiniMax-M3 for a detailed explanation
+      sendSSE({ status: 'Ausführliche Erklärung (M3) wird geladen...' });
+      const detailedLLMRes = await callLLM(systemPrompt, 'MiniMax-M3');
+      const sanitizedDetailed = sanitizeLLMContent(detailedLLMRes.content);
+
+      // Send detailed explanation response
+      sendSSE({ content: sanitizedDetailed, tokensUsed: totalTokens + detailedLLMRes.tokens });
+      totalTokens += detailedLLMRes.tokens;
+
+      // 4. Translation and background search
       let translations: Record<string, string> = {};
       if (word && Array.isArray(languages) && languages.length > 0) {
         try {
           const transPrompt = `Translate the word "${word}" into the following languages: ${languages.join(', ')}.
           Respond with a valid JSON object only, where keys are uppercase language codes and values are the translations. Example: {"EN": "translation", "ES": "translation"}.`;
-          const transLLMRes = await callLLM(transPrompt);
+          const transLLMRes = await callLLM(transPrompt, 'MiniMax-M2.7-highspeed'); // use fast model for translations too
           translations = parseSafeJSON(transLLMRes.content);
           totalTokens += transLLMRes.tokens;
           sendSSE({ translations });
@@ -1652,7 +1664,7 @@ Speziell für das Land/die Region:
 
       let webContent: string | null = null;
 
-      // 4. Background search and second LLM call (only if word is set)
+      // 5. Background search and second LLM call (only if word is set)
       if (word) {
         sendSSE({ status: `Suche im Web nach "${word}" läuft im Hintergrund...` });
         const searchQuery = mode === 'buy' 
@@ -1667,7 +1679,7 @@ Speziell für das Land/die Region:
             // Build second prompt incorporating the search context
             const webSystemPrompt = `${systemPrompt}\n\n[ECHTZEIT-SUCHERGEBNISSE AUS DEM INTERNET]:\n${searchResults}\n\nNutze diese Websuch-Ergebnisse, um die vorherige Definition zu aktualisieren, zu ergänzen oder zu präzisieren. Liefere eine kurze, aktualisierte Definition in 1-2 Sätzen (oder im gleichen Format) auf Deutsch.`;
             
-            const webLLMRes = await callLLM(webSystemPrompt);
+            const webLLMRes = await callLLM(webSystemPrompt, 'MiniMax-M3');
             webContent = sanitizeLLMContent(webLLMRes.content);
             totalTokens += webLLMRes.tokens;
             
@@ -1683,9 +1695,10 @@ Speziell für das Land/die Region:
         sendSSE({ webContent: null });
       }
 
-      // 5. Save to Cache
+      // 6. Save to Cache
       explanationCache.set(cacheKey, { 
-        content: sanitizedInitial, 
+        fastContent: sanitizedFast,
+        content: sanitizedDetailed, 
         webContent, 
         translations,
         tokensUsed: totalTokens 
