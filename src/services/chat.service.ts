@@ -3,7 +3,7 @@ import { TokenService } from './token.service';
 import { logger } from '../utils/logger';
 
 const BASE64_MARKDOWN_REGEX = /!\[([^\]]*)\]\((data:image\/[a-zA-Z0-9+.-]+;base64,[A-Za-z0-9+/=]+)\)/g;
-const UPLOAD_URL_REGEX = /https?:\/\/[^\/]+\/uploads\/bilder\/([a-zA-Z0-9_\-]+)\/([a-f0-9]+\.[a-z]+)/g;
+const UPLOAD_URL_REGEX = /https?:\/\/[^\/]+\/(?:[^\/]+\/)?uploads\/bilder\/([a-zA-Z0-9_\-]+)\/([a-f0-9]+\.[a-z]+)/g;
 const ANY_IMAGE_MARKDOWN_REGEX = /!\[([^\]]*)\]\(([^)]+)\)/g;
 
 type MessageContentPart =
