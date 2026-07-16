@@ -1,4 +1,4 @@
-const CACHE_NAME = 'thaimachine-ai-cache-v4';
+const CACHE_NAME = 'thaimachine-ai-cache-v5';
 const ASSETS = [
   './',
   './index.html',
@@ -34,6 +34,12 @@ self.addEventListener('activate', (e) => {
 
 // Network-first falling back to cache
 self.addEventListener('fetch', (e) => {
+  // Skip non-http(s) requests (chrome-extension://, data:, blob:, etc.) - we can't cache those
+  const url = new URL(e.request.url);
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return; // Let the browser handle it directly
+  }
+
   // Skip version.json - always go to network for freshness check
   if (e.request.url.includes('version.json')) {
     e.respondWith(fetch(e.request));
@@ -42,10 +48,13 @@ self.addEventListener('fetch', (e) => {
   e.respondWith(
     fetch(e.request)
       .then((res) => {
-        const resClone = res.clone();
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(e.request, resClone);
-        });
+        // Only cache http(s) responses with OK status
+        if (res && res.status === 200 && res.type === 'basic') {
+          const resClone = res.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(e.request, resClone);
+          }).catch(() => {});
+        }
         return res;
       })
       .catch(() => caches.match(e.request))

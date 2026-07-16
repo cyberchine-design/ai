@@ -167,6 +167,16 @@ function App() {
   const [isFetchingBalance, setIsFetchingBalance] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
 
+  // Multi-model states (Agnes, DeepSeek, BytePlus, Gemini)
+  const [mainModel, setMainModel] = useState<string>(() => localStorage.getItem('mainModel') || 'MiniMax-M3');
+  const [agnesApiKey, setAgnesApiKey] = useState<string>(() => localStorage.getItem('agnesApiKey') || '');
+  const [enabledModels, setEnabledModels] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('enabledModels') || '["MiniMax-M3","Gemini","DeepSeek","Agnes"]'); } catch { return ['MiniMax-M3','Gemini','DeepSeek','Agnes']; }
+  });
+  const [modelConfigLoaded, setModelConfigLoaded] = useState<any>(null);
+  const [modelSaving, setModelSaving] = useState(false);
+  const [modelSaveMsg, setModelSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
   // Theme state
   const [theme, setTheme] = useState<'dark' | 'light' | 'gray'>(
     (localStorage.getItem('colorTheme') as 'dark' | 'light' | 'gray') || 'dark'
@@ -272,12 +282,14 @@ function App() {
     const loadDictionaries = async () => {
       try {
         console.log('[Local Dict] Starting to fetch local dictionaries...');
+        // Use relative path so it works both at /ai/ and at root
+        const dictBase = window.location.pathname.includes('/ai/') ? './dictionaries/' : '/dictionaries/';
         const [enRes, thRes] = await Promise.all([
-          fetch('/dictionaries/de-en.json').then(r => {
+          fetch(dictBase + 'de-en.json').then(r => {
             if (!r.ok) console.warn('[Local Dict] EN fetch failed status:', r.status);
             return r.ok ? r.json() : {};
           }),
-          fetch('/dictionaries/de-th.json').then(r => {
+          fetch(dictBase + 'de-th.json').then(r => {
             if (!r.ok) console.warn('[Local Dict] TH fetch failed status:', r.status);
             return r.ok ? r.json() : {};
           })
@@ -784,6 +796,45 @@ function App() {
     }
   }, [activeSettingsTab, token]);
 
+  // Load model config when admin tab opens
+  useEffect(() => {
+    if (activeSettingsTab === 'admin' && isAdmin && token) {
+      apiFetch('/admin/model-config')
+        .then(data => setModelConfigLoaded(data))
+        .catch(() => {});
+    }
+  }, [activeSettingsTab, isAdmin, token]);
+
+  // Save model config to backend
+  const handleSaveModelConfig = async () => {
+    setModelSaving(true);
+    setModelSaveMsg(null);
+    try {
+      await apiFetch('/admin/model-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          global: { mainModel, agnesKey: agnesApiKey, enabledModels },
+          users: {}
+        })
+      });
+      localStorage.setItem('mainModel', mainModel);
+      localStorage.setItem('agnesApiKey', agnesApiKey);
+      localStorage.setItem('enabledModels', JSON.stringify(enabledModels));
+      setModelSaveMsg({ ok: true, text: '✅ Model-Konfiguration gespeichert!' });
+      setTimeout(() => setModelSaveMsg(null), 3000);
+    } catch (err: any) {
+      setModelSaveMsg({ ok: false, text: '❌ Fehler: ' + err.message });
+    } finally {
+      setModelSaving(false);
+    }
+  };
+
+  // Toggle model on/off
+  const toggleModel = (modelName: string) => {
+    setEnabledModels(prev => prev.includes(modelName) ? prev.filter(m => m !== modelName) : [...prev, modelName]);
+  };
+
   const [sidebarOpen, setSidebarOpen] = useState(false); // Open by default for sidebar accessibility
 
   const [inputExpanded, setInputExpanded] = useState(false);
@@ -915,6 +966,9 @@ function App() {
 
   // API online status
   const [apiOnline, setApiOnline] = useState(false);
+  // Track consecutive failed health checks to distinguish "restarting" (brief) from "down" (long)
+  const [apiDownSince, setApiDownSince] = useState<number | null>(null);
+  const [showRestartBanner, setShowRestartBanner] = useState(false);
 
   // Version check for live updates
   const [currentVersion, setCurrentVersion] = useState<string | null>(null);
@@ -931,17 +985,35 @@ function App() {
         const res = await fetch(healthUrl, { method: 'GET', headers: token ? { 'Authorization': `Bearer ${token}` } : {} });
         if (res.ok) {
           setApiOnline(true);
+          setApiDownSince(null);
+          setShowRestartBanner(false);
         } else {
           setApiOnline(false);
+          // Track when it went down
+          setApiDownSince(prev => prev ?? Date.now());
         }
       } catch {
         setApiOnline(false);
+        setApiDownSince(prev => prev ?? Date.now());
       }
     };
     checkHealth();
     const interval = setInterval(checkHealth, 30000);
     return () => clearInterval(interval);
   }, [token]);
+
+  // Show "Server wird neu gestartet..." banner after 2 consecutive failed checks (~1 min)
+  useEffect(() => {
+    if (!apiDownSince) {
+      setShowRestartBanner(false);
+      return;
+    }
+    // After 30s of being down, show the banner
+    const timer = setTimeout(() => {
+      setShowRestartBanner(true);
+    }, 30000);
+    return () => clearTimeout(timer);
+  }, [apiDownSince]);
 
   // Version check logic
   const checkForUpdate = async () => {
@@ -1101,7 +1173,7 @@ function App() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
 
   // Model selector states
-  const [selectedModel, setSelectedModel] = useState('MiniMax-M3');
+  const [selectedModel, setSelectedModel] = useState(() => localStorage.getItem('selectedModel') || 'MiniMax-M3');
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   
   // Media Overlay state
@@ -1991,6 +2063,11 @@ Schreibe diese finale Zusammenfassung UNBEDINGT in einen Block, der mit [PROFILE
   const createNewSession = async () => {
     // Check for updates on new chat
     checkForUpdate();
+    if (!token) {
+      triggerSystemAlert('Bitte zuerst einloggen, um einen Chat zu starten.', true);
+      handleLogout();
+      return;
+    }
     try {
       const session = await apiFetch('/chat/sessions', {
         method: 'POST',
@@ -2001,7 +2078,13 @@ Schreibe diese finale Zusammenfassung UNBEDINGT in einen Block, der mit [PROFILE
       setMessages([]);
     } catch (err: any) {
       console.error(err);
-      triggerSystemAlert(`Fehler beim Erstellen eines neuen Chats: ${err.message}`, true);
+      // If auth error, force logout so user sees login screen
+      if (err.message && (err.message.includes('401') || err.message.includes('Unauthorized') || err.message.includes('Token'))) {
+        triggerSystemAlert('Sitzung abgelaufen — bitte neu einloggen.', true);
+        handleLogout();
+      } else {
+        triggerSystemAlert(`Fehler beim Erstellen eines neuen Chats: ${err.message}`, true);
+      }
     }
   };
 
@@ -2270,6 +2353,17 @@ Befolge diese Architekturrichtlinien:
         </div>
       )}
 
+      {/* Server restart banner — shown when health check fails for >30s */}
+      {showRestartBanner && token && (
+        <div className="server-restart-banner">
+          <div className="server-restart-spinner" />
+          <div className="server-restart-text">
+            <strong>Server wird gerade neu gestartet</strong>
+            <span>Render Free-Tier wacht auf — dauert ca. 30-60 Sekunden...</span>
+          </div>
+        </div>
+      )}
+
       <div className={`app-container ${!sidebarOpen ? 'clean-mode' : ''} ${isInspecting ? 'inspecting' : ''}`}>
       {systemAlert && (
         <div className="system-alert-overlay">
@@ -2370,8 +2464,9 @@ Befolge diese Architekturrichtlinien:
                 )}
               </div>
             )}
-            <div className="token-header-badge">
-              Tokens: {tokenBalance.toLocaleString()}
+            <div className="token-header-badge" title="Dein Token-Guthaben">
+              <span className="token-coin-icon">🪙</span>
+              <span className="token-amount">{tokenBalance.toLocaleString()}</span>
             </div>
             {!isAdmin && userNotifications.some((n: any) => !n.read) && (
               <div
@@ -2847,6 +2942,40 @@ Befolge diese Architekturrichtlinien:
                     </button>
                   )}
 
+                  {/* Model Switcher - Apple Toggle Style */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginRight: '4px' }}>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginRight: '2px' }}>🤖</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const modelMap: Record<string, string> = { Agnes: 'Agnes-Flash-2.0', DeepSeek: 'deepseek-chat', Gemini: 'gemini-1.5-flash', BytePlus: 'byteplus', 'MiniMax-M3': 'MiniMax-M3' };
+                        const displayModels = enabledModels.length > 0 ? enabledModels : ['MiniMax-M3'];
+                        const idx = displayModels.indexOf(selectedModel);
+                        const next = displayModels[(idx + 1) % displayModels.length];
+                        const backendName = modelMap[next] || next;
+                        setSelectedModel(backendName);
+                        localStorage.setItem('selectedModel', backendName);
+                      }}
+                      style={{
+                        padding: '0 10px',
+                        borderRadius: '16px',
+                        border: '1px solid rgba(45,200,220,0.3)',
+                        background: 'rgba(45,200,220,0.1)',
+                        color: '#2dc8dc',
+                        cursor: 'pointer',
+                        fontSize: '0.75rem',
+                        fontWeight: 'bold',
+                        whiteSpace: 'nowrap',
+                        maxHeight: '32px',
+                        display: 'flex',
+                        alignItems: 'center'
+                      }}
+                      title="Klicke zum Wechseln: " + (enabledModels.length > 0 ? enabledModels.join(', ') : 'MiniMax-M3')
+                    >
+                      {selectedModel}
+                    </button>
+                  </div>
+
                   {/* 3-dots Menu Button */}
                   <div ref={attachmentMenuRef} className="chat-input-attachment-menu-container" style={{ position: 'relative' }}>
                     <button
@@ -2888,16 +3017,41 @@ Befolge diese Architekturrichtlinien:
             </div>
           ) : (
             <div className="no-chat-prompt">
-              <h3>Bereit zum Start</h3>
-              <p>Erstelle einen neuen Chat, um mit T-AI zu sprechen.</p>
-              <button 
-                type="button" 
-                className="new-chat-btn" 
-                onClick={createNewSession}
-                style={{ marginTop: '16px', maxWidth: '200px', display: 'flex', gap: '8px', alignSelf: 'center' }}
-              >
-                ➕ Neuen Chat starten
-              </button>
+              {!apiOnline ? (
+                <>
+                  <h3>⏳ Backend wird geladen…</h3>
+                  <p>Der Server ist gerade nicht erreichbar (Render Free-Tier startet).<br/>Dies dauert ca. 30-60 Sekunden.</p>
+                  <div className="loading-dots">
+                    <span></span><span></span><span></span>
+                  </div>
+                </>
+              ) : !token ? (
+                <>
+                  <h3>🔐 Bitte einloggen</h3>
+                  <p>Du musst eingeloggt sein, um einen Chat zu starten.</p>
+                  <button
+                    type="button"
+                    className="new-chat-btn"
+                    onClick={handleLogout}
+                    style={{ marginTop: '16px', maxWidth: '200px', display: 'flex', gap: '8px', alignSelf: 'center' }}
+                  >
+                    🔑 Zum Login
+                  </button>
+                </>
+              ) : (
+                <>
+                  <h3>Bereit zum Start</h3>
+                  <p>Erstelle einen neuen Chat, um mit T-AI zu sprechen.</p>
+                  <button
+                    type="button"
+                    className="new-chat-btn"
+                    onClick={createNewSession}
+                    style={{ marginTop: '16px', maxWidth: '200px', display: 'flex', gap: '8px', alignSelf: 'center' }}
+                  >
+                    ➕ Neuen Chat starten
+                  </button>
+                </>
+              )}
             </div>
           )}
         </main>
@@ -3368,6 +3522,125 @@ Befolge diese Architekturrichtlinien:
                         )}
                       </div>
                     </>
+
+                    {/* MULTI-MODEL CONFIG PANEL */}
+                    <div style={{ marginTop: '24px', paddingTop: '20px', borderTop: '1px solid rgba(45,200,220,0.15)' }}>
+                      <h4 style={{ margin: '0 0 12px 0', fontSize: '1rem', color: 'var(--accent-cyan)' }}>🤖 Multi-Model Konfiguration</h4>
+                      <p className="settings-section-desc" style={{ marginBottom: '16px' }}>Wähle das Hauptmodell und aktiviere/deaktiviere verfügbare KI-Modelle.</p>
+
+                      {/* Agnes API Key */}
+                      <div className="form-group full-width">
+                        <label>Agnes Flash 2.0 API Key:</label>
+                        <input
+                          type="password"
+                          value={agnesApiKey}
+                          onChange={e => setAgnesApiKey(e.target.value)}
+                          placeholder="cpk-..."
+                          style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid rgba(45,200,220,0.3)', background: 'rgba(255,255,255,0.05)', color: '#fff', fontSize: '0.9rem' }}
+                        />
+                      </div>
+
+                      {/* Hauptmodell Selector */}
+                      <div className="form-group full-width">
+                        <label>Hauptmodell:</label>
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                          {['MiniMax-M3', 'Agnes', 'DeepSeek', 'Gemini', 'BytePlus'].map(m => {
+                            const available = enabledModels.includes(m);
+                            return (
+                              <button
+                                key={m}
+                                type="button"
+                                disabled={!available}
+                                onClick={() => setMainModel(m)}
+                                style={{
+                                  padding: '8px 16px',
+                                  borderRadius: '20px',
+                                  border: mainModel === m ? '2px solid #2dc8dc' : '1px solid rgba(45,200,220,0.3)',
+                                  background: mainModel === m ? 'rgba(45,200,220,0.15)' : 'rgba(255,255,255,0.03)',
+                                  color: available ? (mainModel === m ? '#2dc8dc' : '#ccc') : '#555',
+                                  cursor: available ? 'pointer' : 'not-allowed',
+                                  fontSize: '0.85rem',
+                                  fontWeight: mainModel === m ? 'bold' : 'normal',
+                                  transition: 'all 0.2s',
+                                  opacity: available ? 1 : 0.4,
+                                  textDecoration: mainModel === m ? 'underline' : 'none',
+                                  textUnderlineOffset: '4px'
+                                }}
+                              >
+                                {m}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Enabled Models Toggle - Apple Style Switches */}
+                      <div className="form-group full-width">
+                        <label>Modelle aktivieren/deaktivieren:</label>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '8px' }}>
+                          {['MiniMax-M3', 'Agnes', 'DeepSeek', 'Gemini', 'BytePlus'].map(m => {
+                            const on = enabledModels.includes(m);
+                            return (
+                              <div key={m} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.02)' }}>
+                                <span style={{ color: '#ccc', fontSize: '0.9rem' }}>{m}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleModel(m)}
+                                  style={{
+                                    width: '44px',
+                                    height: '24px',
+                                    borderRadius: '12px',
+                                    border: 'none',
+                                    background: on ? '#2dc8dc' : 'rgba(255,255,255,0.15)',
+                                    cursor: 'pointer',
+                                    position: 'relative',
+                                    transition: 'background 0.3s',
+                                    flexShrink: 0
+                                  }}
+                                >
+                                  <span style={{
+                                    position: 'absolute',
+                                    top: '2px',
+                                    left: on ? '22px' : '2px',
+                                    width: '20px',
+                                    height: '20px',
+                                    borderRadius: '50%',
+                                    background: '#fff',
+                                    transition: 'left 0.3s',
+                                    boxShadow: '0 1px 3px rgba(0,0,0,0.3)'
+                                  }}></span>
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Save Button */}
+                      <div className="settings-actions" style={{ marginTop: '20px' }}>
+                        <button
+                          className="save-btn-settings"
+                          onClick={handleSaveModelConfig}
+                          disabled={modelSaving}
+                          style={{ minWidth: '160px' }}
+                        >
+                          {modelSaving ? '⏳ Speichern...' : '💾 Model-Konfiguration speichern'}
+                        </button>
+                      </div>
+                      {modelSaveMsg && (
+                        <div style={{
+                          marginTop: '12px',
+                          padding: '10px 14px',
+                          borderRadius: '8px',
+                          background: modelSaveMsg.ok ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
+                          color: modelSaveMsg.ok ? '#10b981' : '#ef4444',
+                          fontSize: '0.85rem'
+                        }}>
+                          {modelSaveMsg.text}
+                        </div>
+                      )}
+                    </div>
+                  </>
                   ) : (
                     <>
                       <p className="settings-section-desc">Übersicht über dein verbleibendes Token-Budget für diesen Monat.</p>
