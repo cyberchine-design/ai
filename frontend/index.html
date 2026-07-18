@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <link rel="icon" type="image/svg+xml" href="./assets/favicon-BwhDGYg6.svg" />
+    <link rel="manifest" href="./assets/manifest-B3dHX1Of.json" />
+    <meta name="theme-color" content="#030809" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Thaimachine AI</title>
+    <script src="./config.js"></script>
+    <script src="./translator.js"></script>
+    <script src="./update-toast.js"></script>
+    <!-- FastDesign Inspector: DevTools + Console + Cache-Toggle.
+         v2.2.14 — Cache: OFF Button ist klickbar. Cache-Busting-Query
+         zwingt Browser bei jedem Reload eine neue URL anzufragen, damit
+         der Browser keine alte Version aus dem HTTP-Cache zieht. Wird
+         beim deploy.sh automatisch auf den aktuellen buildTime-Wert
+         synchronisiert (siehe deploy.sh Hook). -->
+    <script>
+      // Auto-Loader mit Cache-Busting: laedt fastdesign.js mit Timestamp-Query,
+      // sodass Browser/CDN niemals eine alte Version aus dem Cache liefert.
+      (function () {
+        var cb = (window.__ceFdCb || Date.now());
+        var s = document.createElement('script');
+        s.src = 'https://thaimachinestudio.com/design/fastdesign.js?v=' + cb;
+        s.async = true;
+        s.onerror = function () { console.warn('[chat-enhancer] fastdesign.js konnte nicht geladen werden — Cache-Toggle nicht verfuegbar'); };
+        document.body.appendChild(s);
+      })();
+    </script>
+    <script type="module" crossorigin src="./assets/index-C_VSW-3f.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-DJnd0uK-.css">
+  </head>
+  <body>
+    <div id="root"></div>
+
+  <!-- FastDesign Dev-Inspector (vom Server geladen) -->
+  <script src="https://thaimachinestudio.com/design/fastdesign.js"></script>
+</body>
+</html>
